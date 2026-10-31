@@ -8,12 +8,13 @@ Maintained fork of [DiscordAcePerms](https://github.com/JaredScar/DiscordAcePerm
 
 1. Install and configure **JMS_Discord_API** first (bot token, guild ID). This resource needs its `GetDiscordRolesEx` export.
 2. Edit `config.lua`: set `Discord_Link`, `Whitelist_Role`, and `roleList` (Discord role ID to ACE group). Role IDs are **strings**.
-3. Define the groups in your `permissions.cfg`. This resource only adds and removes players from a group; what the group may do is up to you, for example:
+3. Define the groups in your `permissions.cfg`. This resource only adds and removes players from a group; what the group may do is up to you. Out of the box, Owner, Admin, Dev and Management all map to one group, `group.staff`, so define that one first:
 
 ```cfg
-add_ace group.admin command allow
-add_ace group.dev command.restart allow
+add_ace group.staff command.kick allow   # example: give staff whatever they should be able to do
 ```
+
+   Later you can point each staff role at its own group in `roleList`. If you also gate a city feature on a role (the Baddies Portal is the first), uncomment its entry in `roleList` and define that group the same way.
 
 4. In `server.cfg`, start the API before this resource:
 
@@ -23,6 +24,8 @@ ensure DiscordAcePerms
 ```
 
 Players need the Discord desktop app running when they launch FiveM, or FiveM has no Discord identifier for them.
+
+On startup (a few seconds after the API connects) the console checks every role ID in `config.lua`, including `Whitelist_Role`, against your Discord and prints either the role's name or `role ID ... was not found`. Read that output on your first boot: it catches a mistyped ID, or one rounded by a spreadsheet, which would otherwise silently match nobody. The check looks roles up by name, so two roles sharing one name can make one look missing.
 
 ## How it behaves
 
@@ -43,7 +46,7 @@ Set `Require_Whitelist = false` to disable the gate and only sync groups. Set `S
 ## For other resources
 
 ```lua
-local groups = exports.DiscordAcePerms:GetPlayerGroups(source)   -- sorted array, e.g. { 'group.admin' }
+local groups = exports.DiscordAcePerms:GetPlayerGroups(source)   -- sorted array, e.g. { 'group.staff' }
 local status = exports.DiscordAcePerms:RefreshPlayer(source)     -- 'ok' | 'not_in_guild' | 'api_error' | ...
 
 AddEventHandler('DiscordAcePerms:permissionsChanged', function(src, groups, added, removed)
