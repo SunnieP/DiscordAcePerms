@@ -21,6 +21,7 @@ WL = "1552416185696653382"
 ADMIN = "1556173765396668486"
 DEV = "1552837076880334992"
 MGMT = "1562831844968497193"
+OWNER = "1552415657503490200"
 OTHER = "1500000000000000001"
 U1 = "111111111111111111"
 U2 = "222222222222222222"
@@ -76,6 +77,7 @@ exports = setmetatable({}, {
         if __api_raises then error('No such export ' .. fn .. ' in resource ' .. resource) end
         if fn == 'ClearCache' then py_clear(...) return end
         if fn == 'GetDiscordRolesEx' then return py_api(...) end
+        if fn == 'GetGuildRoleList' then return py_guild_roles() end
       end
     end })
   end,
@@ -83,8 +85,18 @@ exports = setmetatable({}, {
 """
 
 
+TEST_ROLELIST = f"""
+Config.Whitelist_Role = "{WL}"
+Config.roleList = {{
+  {{ "{ADMIN}", "group.admin" }},
+  {{ "{DEV}", "group.dev" }},
+  {{ "{MGMT}", "group.management" }},
+}}
+"""
+
+
 class Env:
-    def __init__(self, config_lua="", players=None, api=None):
+    def __init__(self, config_lua="", players=None, api=None, shipped=False):
         self.lua = LuaRuntime(unpack_returned_tuples=True)
         self.g = self.lua.globals()
         self.players = dict(players) if players is not None else {}  # src -> discord id str (or None)
@@ -93,6 +105,7 @@ class Env:
         self.cmds, self.printed, self.client, self.events = [], [], [], []
         self.cleared, self.handlers, self.commands, self.threads = [], {}, {}, []
         self.on_api = None
+        self.guild_roles = None  # None = the role-list call fails; else {role name: role id}
 
         g = self.g
         g.py_print = lambda s: self.printed.append(s)
@@ -108,9 +121,13 @@ class Env:
         g.py_wait = lambda ms: None
         g.py_clear = lambda d: self.cleared.append(d)
         g.py_api = self._api
+        g.py_guild_roles = self._guild_roles
 
         self.lua.execute(PRELUDE)
         self.lua.execute(open(os.path.join(REPO, "config.lua")).read())
+        if not shipped:
+            # Tests use their own role list so they do not break when the real config is edited.
+            self.lua.execute(TEST_ROLELIST)
         if config_lua:
             self.lua.execute(config_lua)
         self.lua.execute(open(os.path.join(REPO, "server.lua")).read())
@@ -122,6 +139,12 @@ class Env:
             return None
         did = self.players.get(int(src))
         return f"discord:{did}" if did else None
+
+    def _guild_roles(self):
+        if self.guild_roles is None:
+            self.g["__api_raises"] = True
+            raise RuntimeError("guild role list unavailable")
+        return self.lua.table_from(self.guild_roles)
 
     def _api(self, src):
         if self.on_api:
@@ -509,6 +532,100 @@ def exports_work():
     assert e.exports["RefreshPlayer"](1) == "ok"
     assert to_py(e.exports["GetPlayerGroups"](1)) == ["group.admin", "group.management"]
     assert to_py(e.exports["GetPlayerGroups"](99)) == []
+
+
+# ---------------------------------------------------------------------------
+# The shipped config.lua (what Sunnie actually runs)
+# ---------------------------------------------------------------------------
+
+@test
+def shipped_config_loads_without_ignored_entries():
+    e = Env(players={}, shipped=True)
+    assert "ignored" not in e.output() and "MISCONFIGURED" not in e.output(), e.output()
+    assert "Loaded 4 role mapping(s)" in e.output(), e.output()
+
+
+@test
+def shipped_config_every_staff_role_gets_the_same_single_group():
+    """Staff are deliberately identical during testing; split them up later."""
+    for name, role in (("owner", OWNER), ("admin", ADMIN), ("dev", DEV), ("management", MGMT)):
+        e = Env(players={1: U1}, api={U1: ok([WL, role])}, shipped=True)
+        assert e.connect(1)["done"] == [None], name
+        assert e.effective(U1) == ["group.staff"], (name, e.effective(U1))
+
+
+@test
+def shipped_config_holding_several_staff_roles_grants_the_group_once():
+    e = Env(players={1: U1}, api={U1: ok([WL, OWNER, ADMIN, DEV, MGMT])}, shipped=True)
+    e.connect(1)
+    assert [c for c in e.cmds if c.startswith("add_principal")] == [f"add_principal identifier.discord:{U1} group.staff"]
+
+
+@test
+def shipped_config_ordinary_whitelisted_player_gets_no_groups():
+    e = Env(players={1: U1}, api={U1: ok([WL])}, shipped=True)
+    assert e.connect(1)["done"] == [None]
+    assert e.effective(U1) == []
+
+
+@test
+def shipped_config_staff_role_without_whitelist_is_still_rejected():
+    e = Env(players={1: U1}, api={U1: ok([OWNER])}, shipped=True)
+    assert "whitelist role" in e.connect(1)["done"][0]
+    assert e.effective(U1) == []
+
+
+@test
+def shipped_config_demoted_staff_lose_the_group():
+    e = Env(players={1: U1}, api={U1: ok([WL, ADMIN])}, shipped=True)
+    e.connect(1)
+    e.api[U1] = ok([WL])
+    e.refresh(1)
+    assert e.effective(U1) == []
+
+
+# ---------------------------------------------------------------------------
+# Startup check of configured role IDs
+# ---------------------------------------------------------------------------
+
+REAL_ROLES = {"Whitelisted": WL, "Admin": ADMIN, "Dev": DEV, "Management": MGMT}
+
+
+@test
+def startup_check_confirms_ids_that_exist():
+    e = Env(players={}, shipped=True)
+    e.guild_roles = dict(REAL_ROLES, Owner=OWNER)
+    e.run_thread(2, budget=1)
+    out = e.output()
+    assert "not found" not in out, out
+    assert 'Whitelist: role %s is "Whitelisted"' % WL in out, out
+
+
+@test
+def startup_check_flags_an_id_that_is_not_in_the_discord():
+    """The case that motivated it: a mistyped or spreadsheet-rounded ID silently matches nobody."""
+    e = Env(players={}, shipped=True)
+    e.guild_roles = dict(REAL_ROLES, Owner="1552415657503490304")  # the real owner role, different digits
+    e.run_thread(2, budget=1)
+    out = e.output()
+    assert f"role ID {OWNER} was not found" in out, out
+    assert out.count("was not found") == 1, "only the bad ID may be flagged"
+
+
+@test
+def startup_check_flags_a_bad_whitelist_role_too():
+    e = Env(players={}, shipped=True)
+    e.guild_roles = {"Admin": ADMIN, "Dev": DEV, "Management": MGMT, "Owner": OWNER}  # whitelist role missing
+    e.run_thread(2, budget=1)
+    assert f"Whitelist: role ID {WL} was not found" in e.output(), e.output()
+
+
+@test
+def startup_check_survives_the_api_being_unavailable():
+    e = Env(players={}, shipped=True)
+    e.guild_roles = None
+    e.run_thread(2, budget=1)
+    assert "NOT verified" in e.output(), e.output()
 
 
 @test
