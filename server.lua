@@ -337,6 +337,32 @@ CreateThread(function()
 	end
 end)
 
+-- Startup check: do the role IDs in config.lua exist in your Discord? A typo, or an ID that was
+-- rounded by a spreadsheet, silently matches nobody, so say so loudly instead.
+-- (Limit: roles are looked up by name, so two roles sharing one name can make one look missing.)
+CreateThread(function()
+	Wait(5000) -- let JMS_Discord_API finish starting and connecting
+	local ok, list = pcall(function() return exports[API]:GetGuildRoleList() end)
+	if not ok or type(list) ~= 'table' then
+		logWarn('Could not fetch your Discord role list, so the role IDs in config.lua were NOT verified.')
+		return
+	end
+
+	local nameById = {}
+	for name, id in pairs(list) do nameById[tostring(id)] = name end
+
+	local function check(label, id)
+		if nameById[id] then
+			logInfo(('%s: role %s is "%s"'):format(label, id, nameById[id]))
+		else
+			logError(('%s: role ID %s was not found in your Discord. Check for a typo, or an ID rounded by a spreadsheet. Copy it again with Developer Mode on.'):format(label, id))
+		end
+	end
+
+	if whitelistRole then check('Whitelist', whitelistRole) end
+	for _, e in ipairs(roleEntries) do check(e.group, e.role) end
+end)
+
 -- ---------------------------------------------------------------------------
 -- Exports for other resources
 -- ---------------------------------------------------------------------------

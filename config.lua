@@ -18,10 +18,16 @@ Config = {
 	-- { "<Discord role ID>", "<ACE group>" }
 	-- Role IDs are STRINGS. A role can map to several groups; a group can come from several roles.
 	-- The groups themselves (and what they may do) are defined in your permissions.cfg.
+	-- On startup the console tells you if any ID here (or Whitelist_Role) is not found in your Discord.
 	roleList = {
-		{ '1556173765396668486', 'group.admin' },      -- Admin
-		{ '1552837076880334992', 'group.dev' },        -- Dev
-		{ '1562831844968497193', 'group.management' }, -- Management
-		-- { 'OWNER_ROLE_ID', 'group.owner' },          -- Owner: paste the role ID, then uncomment
+		-- Staff: during testing every staff role gets the same group. Split them up later by pointing
+		-- each role at its own group.
+		{ '1552415657503490200', 'group.staff' }, -- Owner
+		{ '1556173765396668486', 'group.staff' }, -- Admin
+		{ '1552837076880334992', 'group.staff' }, -- Dev
+		{ '1562831844968497193', 'group.staff' }, -- Management
+
+		-- Gated city features. Right now the only one is the Baddies Portal.
+		-- { 'BADDIES_ROLE_ID', 'group.baddies' }, -- paste the role ID, then uncomment
 	},
 }
