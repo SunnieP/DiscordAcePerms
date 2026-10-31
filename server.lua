@@ -1,250 +1,356 @@
------------------------------------
---- Discord ACE Perms by Badger ---
------------------------------------
+-- DiscordAcePerms
+-- Gates joining on a Discord whitelist role and keeps ACE permission groups in sync with Discord roles.
+-- Fork of DiscordAcePerms by Jared Scarito (MIT). Requires the JMS_Discord_API resource.
 
---- Code ---
-local function has_value (tab, val)
-    for index, value in ipairs(tab) do
-        if value == val then
-            return true
-        end
-    end
+local RESOURCE = GetCurrentResourceName()
+local API = 'JMS_Discord_API'
 
-    return false
-end
-function stringsplit(inputstr, sep)
-    if sep == nil then
-        sep = "%s"
-    end
-    local t={} ; i=1
-    for str in string.gmatch(inputstr, "([^"..sep.."]+)") do
-        t[i] = str
-        i = i + 1
-    end
-    return t
-end
-function ExtractIdentifiers(src)
-    local identifiers = {
-        steam = "",
-        ip = "",
-        discord = "",
-        license = "",
-        xbl = "",
-        live = ""
-    }
+-- A granted entry for someone who is not online is revoked after this long (covers connections that
+-- were granted perms but never made it into the server, so no playerDropped fired).
+local STALE_GRACE_MS = 120000
+local SWEEP_INTERVAL_MS = 60000
+local SYNC_STAGGER_MS = 250 -- gap between players in the periodic sync, keeps Discord rate limits happy
 
-    --Loop over all identifiers
-    for i = 0, GetNumPlayerIdentifiers(src) - 1 do
-        local id = GetPlayerIdentifier(src, i)
+-- ---------------------------------------------------------------------------
+-- Logging / helpers
+-- ---------------------------------------------------------------------------
 
-        --Convert it to a nice table.
-        if string.find(id, "steam") then
-            identifiers.steam = id
-        elseif string.find(id, "ip") then
-            identifiers.ip = id
-        elseif string.find(id, "discord") then
-            identifiers.discord = id
-        elseif string.find(id, "license") then
-            identifiers.license = id
-        elseif string.find(id, "xbl") then
-            identifiers.xbl = id
-        elseif string.find(id, "live") then
-            identifiers.live = id
-        end
-    end
-
-    return identifiers
+local function logInfo(msg) print(('^2[%s]^7 %s'):format(RESOURCE, msg)) end
+local function logWarn(msg) print(('^3[%s]^7 %s'):format(RESOURCE, msg)) end
+local function logError(msg) print(('^1[%s]^7 %s'):format(RESOURCE, msg)) end
+local function logDebug(msg)
+	if Config.DebugScript then print(('^5[%s DEBUG]^7 %s'):format(RESOURCE, msg)) end
 end
 
-DiscordDetector = {}
+local function now() return GetGameTimer() end
 
-InDiscordDetector = {}
+local function isSnowflake(v)
+	local s = tostring(v)
+	return s:match('^%d+$') ~= nil and #s >= 15
+end
 
-PermTracker = {}
+local function sortedKeys(set)
+	local out = {}
+	for k in pairs(set) do out[#out + 1] = k end
+	table.sort(out)
+	return out
+end
 
-roleList = Config.roleList;
+local function chat(src, msg)
+	TriggerClientEvent('chatMessage', src, '^9[^5DiscordAcePerms^9] ^3' .. msg)
+end
 
-AddEventHandler('playerDropped', function (reason) 
-	local src = source;
-	local discord = ExtractIdentifiers(src).discord:gsub("discord:", "");
-	local license = ExtractIdentifiers(src).license;
-	if PermTracker[discord] ~= nil then 
-		-- They have perms that need to be removed:
-		local list = PermTracker[discord];
-		for i = 1, #list do 
-			local permGroup = list[i];
-			ExecuteCommand('remove_principal identifier.discord:' .. discord .. " " .. permGroup);
-			if (Config.Print_Perm_Grants_And_Removals) then
-				print("[DiscordAcePerms] (playerDropped) Removed " 
-					.. GetPlayerName(src) .. " from role group " .. permGroup)
-			end
+-- ---------------------------------------------------------------------------
+-- Config validation (bad entries are skipped loudly instead of silently granting nothing)
+-- ---------------------------------------------------------------------------
+
+local roleEntries = {} -- { role = "<id>", group = "group.x" }
+local whitelistRole = nil
+
+local function loadConfig()
+	roleEntries = {}
+	for i, entry in ipairs(Config.roleList or {}) do
+		local roleId, group = entry[1], entry[2]
+		if isSnowflake(roleId) and type(group) == 'string' and group:match('^[%w%._%-]+$') then
+			roleEntries[#roleEntries + 1] = { role = tostring(roleId), group = group }
+		else
+			logError(('roleList entry #%d ignored: needs { "<Discord role ID>", "group.name" } (got %s, %s)')
+				:format(i, tostring(roleId), tostring(group)))
 		end
-		PermTracker[discord] = nil;
 	end
-	DiscordDetector[license] = nil;
-end)
-debugScript = Config.DebugScript;
 
-permThrottle = {};
-
-Citizen.CreateThread(function()
-	while true do 
-		for discord, count in pairs(permThrottle) do 
-			permThrottle[discord] = (permThrottle[discord] - 1);
-			if (permThrottle[discord] <= 0) then 
-				permThrottle[discord] = nil;
-			end
+	whitelistRole = nil
+	if Config.Require_Whitelist then
+		if isSnowflake(Config.Whitelist_Role) then
+			whitelistRole = tostring(Config.Whitelist_Role)
+		else
+			logError('Require_Whitelist is on but Whitelist_Role is not a valid role ID: NOBODY will be able to join.')
 		end
-		Wait(1000);
 	end
-end)
 
-prefix = '^9[^5DiscordAcePerms^9] ^3'
-function sendMsg(src, msg) 
-	TriggerClientEvent('chatMessage', src, prefix .. msg);
+	logInfo(('Loaded %d role mapping(s); whitelist %s.'):format(
+		#roleEntries, whitelistRole and ('role ' .. whitelistRole) or (Config.Require_Whitelist and 'MISCONFIGURED' or 'off')))
 end
 
-if (Config.Allow_Refresh_Command) then 
-	RegisterCommand('refreshPerms', function(src, args, rawCommand)
-		local discordIdentifier = ExtractIdentifiers(src).discord;
-		if (discordIdentifier ~= nil) then 
-			local discord = discordIdentifier:gsub("discord:", "");
-			if (permThrottle[discord] == nil) then 
-				permThrottle[discord] = Config.Refresh_Throttle;
-				sendMsg(src, "Your permissions have been refreshed ^2successfully^3...");
-				RegisterPermissions(src, 'refreshPerms');
-				TriggerEvent('vMenu:RequestPermissions', src);
-			else 
-				local currentThrottle = permThrottle[discord];
-				sendMsg(src, "^1ERR: You cannot refresh your permissions since you are on a cooldown. You can refresh in ^3" .. currentThrottle .. " ^1seconds...");
-			end
-		else 
-			sendMsg(src, "^1ERR: Your discord identifier was not found...");
+-- ---------------------------------------------------------------------------
+-- Discord lookups
+-- ---------------------------------------------------------------------------
+
+local function discordIdOf(src)
+	local ident = GetPlayerIdentifierByType(tostring(src), 'discord')
+	if ident then return (ident:gsub('^discord:', '')) end
+	return nil
+end
+
+-- Always returns a table with a .status; never throws (the API resource may be stopped).
+local function fetchMember(src, discordId, fresh)
+	local ok, result = pcall(function()
+		if fresh then exports[API]:ClearCache(discordId) end
+		return exports[API]:GetDiscordRolesEx(src)
+	end)
+	if not ok or type(result) ~= 'table' or not result.status then
+		logError(('Could not query %s (is it started before this resource?): %s'):format(API, tostring(result)))
+		return { status = 'api_error' }
+	end
+	return result
+end
+
+-- Turns a role list into the set of ACE groups it grants. Returns desiredGroups, hasWhitelist.
+local function evaluate(roles)
+	local have = {}
+	for _, r in ipairs(roles or {}) do have[tostring(r)] = true end
+
+	local hasWhitelist = (not Config.Require_Whitelist) or (whitelistRole ~= nil and have[whitelistRole] == true)
+	local desired = {}
+	if hasWhitelist then
+		for _, e in ipairs(roleEntries) do
+			if have[e.role] then desired[e.group] = true end
+		end
+	end
+	return desired, hasWhitelist
+end
+
+-- ---------------------------------------------------------------------------
+-- Permission state. granted[discordId] = { groups = { [group] = true }, src = n, at = ms }
+-- Permissions are always changed by DIFFING against what we granted before, so a role that was
+-- removed in Discord is revoked (the original wiped its own tracking and never revoked).
+-- ---------------------------------------------------------------------------
+
+local granted = {}
+local srcToDiscord = {}
+local cooldown = {}
+
+local function principal(verb, discordId, group)
+	ExecuteCommand(('%s identifier.discord:%s %s'):format(verb, discordId, group))
+end
+
+local function applyGroups(src, discordId, desired, where)
+	local entry = granted[discordId]
+	if not entry then
+		entry = { groups = {} }
+		granted[discordId] = entry
+	end
+	entry.src = src
+	entry.at = now()
+	srcToDiscord[src] = discordId
+
+	local added, removed = {}, {}
+	for _, group in ipairs(sortedKeys(desired)) do
+		if not entry.groups[group] then
+			principal('add_principal', discordId, group)
+			entry.groups[group] = true
+			added[#added + 1] = group
+		end
+	end
+	for _, group in ipairs(sortedKeys(entry.groups)) do
+		if not desired[group] then
+			principal('remove_principal', discordId, group)
+			entry.groups[group] = nil
+			removed[#removed + 1] = group
+		end
+	end
+
+	if Config.Print_Perm_Grants_And_Removals then
+		for _, g in ipairs(added) do print(('[%s] (%s) Added %s to %s'):format(RESOURCE, where, tostring(GetPlayerName(src)), g)) end
+		for _, g in ipairs(removed) do print(('[%s] (%s) Removed %s from %s'):format(RESOURCE, where, tostring(GetPlayerName(src)), g)) end
+	end
+	if #added > 0 or #removed > 0 then
+		TriggerEvent('DiscordAcePerms:permissionsChanged', src, sortedKeys(entry.groups), added, removed)
+	end
+	return added, removed
+end
+
+local function revokeAll(discordId, where)
+	local entry = granted[discordId]
+	if not entry then return end
+	for _, group in ipairs(sortedKeys(entry.groups)) do
+		principal('remove_principal', discordId, group)
+		if Config.Print_Perm_Grants_And_Removals then
+			print(('[%s] (%s) Removed %s from %s'):format(RESOURCE, where, discordId, group))
+		end
+	end
+	if entry.src then srcToDiscord[entry.src] = nil end
+	granted[discordId] = nil
+	TriggerEvent('DiscordAcePerms:permissionsChanged', entry.src, {}, {}, sortedKeys(entry.groups))
+end
+
+-- Re-reads one online player's roles and corrects their groups.
+-- Returns 'ok' | 'not_in_guild' | 'no_discord' | 'api_error' | 'config_error' | 'gone'.
+-- On api_error/config_error NOTHING changes: an outage must not strip or grant permissions.
+local function syncPlayer(src, where, fresh)
+	src = tonumber(src)
+	local discordId = discordIdOf(src)
+	if not discordId then return 'no_discord' end
+
+	local member = fetchMember(src, discordId, fresh)
+
+	-- The player may have left while we waited on Discord. Don't re-grant to a ghost.
+	if discordIdOf(src) ~= discordId then return 'gone' end
+
+	if member.status == 'ok' then
+		local desired = evaluate(member.roles)
+		applyGroups(src, discordId, desired, where)
+		if Config.Trigger_vMenu then TriggerEvent('vMenu:RequestPermissions', src) end
+		return 'ok'
+	elseif member.status == 'not_in_guild' then
+		revokeAll(discordId, where) -- they left the Discord: authoritative
+		return 'not_in_guild'
+	end
+	return member.status
+end
+
+-- ---------------------------------------------------------------------------
+-- Joining
+-- ---------------------------------------------------------------------------
+
+local function rejectionText(kind)
+	local name = Config.Server_Name or 'this server'
+	local link = Config.Discord_Link or ''
+	if kind == 'no_discord' then
+		return ('%s: we could not find your Discord. Open the Discord desktop app, then fully restart FiveM and try again.'):format(name)
+	elseif kind == 'not_in_guild' then
+		return ('%s: you are not in our Discord. Join here, get whitelisted, then reconnect: %s'):format(name, link)
+	elseif kind == 'not_whitelisted' then
+		return ('%s: you are in our Discord but do not have the whitelist role yet. Apply in the Discord: %s'):format(name, link)
+	end
+	return ('%s: we could not verify your whitelist because Discord did not answer. Please try again in a minute.'):format(name)
+end
+
+AddEventHandler('playerConnecting', function(playerName, setKickReason, deferrals)
+	local src = source -- capture before anything yields
+	deferrals.defer()
+	Wait(0)
+	deferrals.update('Checking your Discord whitelist...')
+
+	local strict = Config.Require_Whitelist
+	local discordId = discordIdOf(src)
+	if not discordId then
+		if strict then deferrals.done(rejectionText('no_discord')) else deferrals.done() end
+		return
+	end
+
+	local member = fetchMember(src, discordId, true) -- fresh: someone just whitelisted must get in right away
+	if discordIdOf(src) ~= discordId then return end -- they cancelled while we waited
+
+	if member.status == 'ok' then
+		local desired, hasWhitelist = evaluate(member.roles)
+		if strict and not hasWhitelist then
+			deferrals.done(rejectionText('not_whitelisted'))
+			return
+		end
+		applyGroups(src, discordId, desired, 'playerConnecting')
+		if Config.Trigger_vMenu then TriggerEvent('vMenu:RequestPermissions', src) end
+		deferrals.done()
+	elseif member.status == 'not_in_guild' then
+		if strict then deferrals.done(rejectionText('not_in_guild')) else deferrals.done() end
+	else
+		logWarn(('Could not check %s (%s): %s'):format(tostring(playerName), discordId, member.status))
+		if strict then deferrals.done(rejectionText('api_error')) else deferrals.done() end
+	end
+end)
+
+AddEventHandler('playerDropped', function()
+	local src = source
+	local discordId = discordIdOf(src) or srcToDiscord[src]
+	srcToDiscord[src] = nil
+	local entry = discordId and granted[discordId]
+	-- Only revoke if this is still the session that holds the grant. If they already reconnected
+	-- under a new id, the new session owns it.
+	if entry and entry.src == src then
+		revokeAll(discordId, 'playerDropped')
+	end
+end)
+
+-- ---------------------------------------------------------------------------
+-- /refreshPerms
+-- ---------------------------------------------------------------------------
+
+if Config.Allow_Refresh_Command then
+	RegisterCommand('refreshPerms', function(src)
+		if src == 0 then
+			print(('[%s] /refreshPerms must be run by a player in-game.'):format(RESOURCE))
+			return
+		end
+		local discordId = discordIdOf(src)
+		if not discordId then
+			chat(src, '^1Your Discord was not found. Open the Discord desktop app and restart FiveM.')
+			return
+		end
+
+		local t = now()
+		local untilMs = cooldown[discordId]
+		if untilMs and untilMs > t then
+			chat(src, ('^1You can refresh again in ^3%d ^1seconds.'):format(math.ceil((untilMs - t) / 1000)))
+			return
+		end
+		cooldown[discordId] = t + (Config.Refresh_Throttle or 60) * 1000 -- set first so double-taps can't stack requests
+
+		local status = syncPlayer(src, 'refreshPerms', true)
+		if status == 'ok' then
+			chat(src, 'Your permissions have been refreshed ^2successfully^3.')
+		elseif status == 'not_in_guild' then
+			chat(src, '^1You are no longer in our Discord, so your permissions were removed.')
+		else
+			cooldown[discordId] = nil -- a failed check shouldn't cost them the cooldown
+			chat(src, '^1Could not reach Discord right now, so your permissions were NOT changed. Try again shortly.')
 		end
 	end)
-end 
-
-function sendDbug(msg, eventLocation)
-	if (debugScript) then 
-		print("[DiscordAcePerms DEBUG] (" .. eventLocation .. ") " .. msg);
-	end 
 end
 
-ROLE_CACHE = {};
-function convertRolesToMap(roleIds)
-	roleMap = {};
-	for i = 1, #roleIds do 
-		roleMap[tostring(roleIds[i])] = true;
+-- ---------------------------------------------------------------------------
+-- Background work: periodic sync + cleanup
+-- ---------------------------------------------------------------------------
+
+local function sweep()
+	local t = now()
+	local online = {}
+	for _, id in ipairs(GetPlayers()) do
+		local d = discordIdOf(id)
+		if d then online[d] = true end
 	end
-	return roleMap;
-end
-
-function RegisterPermissions(src, eventLocation)
-	local license = ExtractIdentifiers(src).license;
-	local discord = ExtractIdentifiers(src).discord:gsub("discord:", "");
-	if (discord) then
-		sendDbug("Player " .. GetPlayerName(src) .. " had their Discord identifier found...", eventLocation);
-		exports['Badger_Discord_API']:ClearCache(discord);
-		PermTracker[discord] = nil;
-		local permAdd = "add_principal identifier.discord:" .. discord .. " ";
-		local roleIDs = exports.Badger_Discord_API:GetDiscordRoles(src);
-		if not (roleIDs == false) then
-			local ROLE_MAP = convertRolesToMap(roleIDs);
-			sendDbug("Player " .. GetPlayerName(src) .. " had a valid roleIDs... Length: " .. tostring(#roleIDs), eventLocation);
-			for i = 1, #roleList do
-				local discordRoleId = nil;
-				if (ROLE_CACHE[roleList[i][1]] ~= nil) then 
-					discordRoleId = ROLE_CACHE[roleList[i][1]];
-				else
-					discordRoleId = exports.Badger_Discord_API:FetchRoleID(roleList[i][1]);
-					if (discordRoleId ~= nil) then 
-						ROLE_CACHE[roleList[i][1]] = discordRoleId; 
-					end 
-				end
-				sendDbug("Checking to add permission: " .. roleList[i][2] .. " => Player " .. GetPlayerName(src) .. " has role " .. tostring(discordRoleId) .. " and it was compared against " .. roleList[i][1], eventLocation);
-				if ROLE_MAP[tostring(discordRoleId)] ~= nil then
-					if (Config.Print_Perm_Grants_And_Removals) then 
-						print("[DiscordAcePerms] (" .. eventLocation .. ") Added " .. GetPlayerName(src) .. " to role group " .. roleList[i][2]);
-					end
-					ExecuteCommand(permAdd .. roleList[i][2])
-					-- Track the permission node given: 
-					if PermTracker[discord] ~= nil then 
-						-- Has them, we add to list 
-						local list = PermTracker[discord];
-						table.insert(list, roleList[i][2]);
-						PermTracker[discord] = list;
-					else 
-						-- Doesn't have them, give them a list 
-						local list = {};
-						table.insert(list, roleList[i][2]);
-						PermTracker[discord] = list;
-					end
-				end
-			end
-			if (debugScript) then 
-				print("[DiscordAcePerms DEBUG] (" .. eventLocation .. ") Player " .. GetPlayerName(src) .. " has been granted their permissions...");
-			end 
-			return true;
-		else
-			if (debugScript) then 
-				print("[DiscordAcePerms DEBUG] (" .. eventLocation .. ")" .. GetPlayerName(src) .. " has not gotten permissions because we could not find their roles...");
-			end
-			return false;
+	for discordId, entry in pairs(granted) do
+		if not online[discordId] and t - entry.at > STALE_GRACE_MS then
+			revokeAll(discordId, 'stale')
 		end
 	end
-	return false;
+	for key, expires in pairs(cooldown) do
+		if expires <= t then cooldown[key] = nil end
+	end
 end
 
-AddEventHandler('playerConnecting', function(name, setKickReason, deferrals)
-	deferrals.defer();
-	local src = source;
-	local license = ExtractIdentifiers(src).license;
-	local discord = ExtractIdentifiers(src).discord:gsub("discord:", "");
-		local permAdd = "add_principal identifier.discord:" .. discord .. " ";
-		if discord then
-			if (not RegisterPermissions(src, 'playerConnecting')) then
-				if InDiscordDetector[license] == nil then 
-					-- Notify them they are not in the Discord 
-					InDiscordDetector[license] = true;
-					local clicked = false;
-					while not clicked do 
-						deferrals.presentCard(card,
-						function(data, rawData)
-							if (data.submitId == 'played') then 
-								clicked = true;
-								deferrals.done()
-							end
-						end)
-						Citizen.Wait((1000 * 13));
-					end
-					return;
-				end
-			else
-				TriggerEvent('vMenu:RequestPermissions', src); 
-			end
-		else 
-			if DiscordDetector[license] == nil then 
-				-- Kick with we couldn't find their discord, try to restart it whilst fivem is closed 
-				DiscordDetector[license] = true;
-				print('[DiscordAcePerms] Discord was not found for player ' .. GetPlayerName(src) .. "...")
-				local clicked = false;
-				while not clicked do 
-					deferrals.presentCard(card,
-					function(data, rawData)
-						if (data.submitId == 'played') then 
-							clicked = true;
-							deferrals.done()
-						end
-					end)
-					Citizen.Wait((1000 * 13));
-				end
-				return;
-			end
-		end
-	deferrals.done();
+CreateThread(function()
+	while true do
+		Wait(SWEEP_INTERVAL_MS)
+		sweep()
+	end
 end)
 
--- IMPORTANT
--- 		BEFORE EDITING:
---			 Do not take out my credit... Out of respect for my resources, do not remove my credit. Thank you.
-card = '{"type":"AdaptiveCard","$schema":"http://adaptivecards.io/schemas/adaptive-card.json","version":"1.2","body":[{"type":"Container","items":[{"type":"TextBlock","text":"Welcome to ' .. Config.Server_Name .. '","wrap":true,"fontType":"Default","size":"ExtraLarge","weight":"Bolder","color":"Light"},{"type":"TextBlock","text":"You were not detected in our Discord!","wrap":true,"size":"Large","weight":"Bolder","color":"Light"},{"type":"TextBlock","text":"Please join below, then press play! Have fun!","wrap":true,"color":"Light","size":"Medium"},{"type":"ColumnSet","height":"stretch","minHeight":"100px","bleed":true,"horizontalAlignment":"Center","selectAction":{"type":"Action.OpenUrl"},"columns":[{"type":"Column","width":"stretch","items":[{"type":"ActionSet","actions":[{"type":"Action.OpenUrl","title":"Discord","url":"' .. Config.Discord_Link .. '","style":"positive"}]}]},{"type":"Column","width":"stretch","items":[{"type":"ActionSet","actions":[{"type":"Action.Submit","title":"Play","style":"positive", "id":"played"}]}]},{"type":"Column","width":"stretch","items":[{"type":"ActionSet","actions":[{"type":"Action.OpenUrl","title":"Website","style":"positive","url":"' .. Config.Website_Link .. '"}]}]}]},{"type":"ActionSet","actions":[{"type":"Action.OpenUrl","title":"DiscordAcePerms created by Badger","style":"destructive","iconUrl":"https://i.gyazo.com/c629f37bb1aeed2c1bc1768fdc93bc1a.gif","url":"https://discord.com/invite/WjB5VFz"}]}],"style":"default","bleed":true,"height":"stretch","isVisible":true}]}'
+CreateThread(function()
+	local interval = tonumber(Config.Sync_Interval) or 0
+	if interval <= 0 then return end
+	while true do
+		Wait(interval * 1000)
+		for _, id in ipairs(GetPlayers()) do
+			syncPlayer(id, 'periodic', false)
+			Wait(SYNC_STAGGER_MS)
+		end
+	end
+end)
+
+-- ---------------------------------------------------------------------------
+-- Exports for other resources
+-- ---------------------------------------------------------------------------
+
+-- Sorted array of the ACE groups this player currently holds through Discord.
+exports('GetPlayerGroups', function(src)
+	local discordId = discordIdOf(src)
+	local entry = discordId and granted[discordId]
+	return entry and sortedKeys(entry.groups) or {}
+end)
+
+-- Re-reads one player's roles right now. Returns the status string from syncPlayer.
+exports('RefreshPlayer', function(src)
+	return syncPlayer(src, 'export', true)
+end)
+
+loadConfig()
