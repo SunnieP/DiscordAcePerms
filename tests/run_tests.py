@@ -52,6 +52,8 @@ local function tostr(...) local t = {} for i = 1, select('#', ...) do t[#t+1] = 
 print = function(...) py_print(tostr(...)) end
 
 GetCurrentResourceName = function() return "DiscordAcePerms" end
+__ace_ok = true
+IsPrincipalAceAllowed = function(p, o) return __ace_ok end
 GetGameTimer = function() return py_now() end
 GetPlayerName = function(src) return "P" .. tostring(src) end
 GetPlayerIdentifierByType = function(src, kind) return py_ident(src, kind) end
@@ -273,6 +275,29 @@ def discord_outage_fails_closed_without_claiming_not_in_discord():
     msg = rec["done"][0]
     assert "did not answer" in msg and "not in our Discord" not in msg, msg
     assert e.effective(U1) == []
+
+
+@test
+def one_discord_hiccup_while_joining_is_retried():
+    e = one([WL])
+    calls = []
+    real = {"status": "ok", "roles": [WL]}
+    def flip(_src):
+        calls.append(1)
+        e.api[U1] = {"status": "api_error"} if len(calls) == 1 else real
+    e.on_api = flip
+    rec = e.connect(1)
+    assert rec["done"] == [None], rec
+    assert len(calls) == 2 and any("Trying again" in (m or "") for m in rec["updates"]), (calls, rec)
+
+
+@test
+def a_lasting_outage_still_rejects_after_the_retries():
+    e = one(api={"status": "api_error"})
+    calls = []
+    e.on_api = lambda _s: calls.append(1)
+    rec = e.connect(1)
+    assert len(calls) == 3 and "did not answer" in rec["done"][0], (len(calls), rec)
 
 
 @test
@@ -619,6 +644,19 @@ def startup_check_flags_a_bad_whitelist_role_too():
     e.guild_roles = {"Admin": ADMIN, "Dev": DEV, "Management": MGMT, "Owner": OWNER, "Sweethearts": SWEET}  # whitelist role missing
     e.run_thread(2, budget=1)
     assert f"Whitelist: role ID {WL} was not found" in e.output(), e.output()
+
+
+@test
+def missing_command_permission_is_called_out_at_startup():
+    e = Env(players={}, shipped=True)
+    e.g["__ace_ok"] = False
+    e.run_thread(2, budget=1)
+    out = e.output()
+    assert "add_ace resource.DiscordAcePerms command.add_principal allow" in out, out
+    assert "add_ace resource.DiscordAcePerms command.remove_principal allow" in out, out
+    e = Env(players={}, shipped=True)
+    e.run_thread(2, budget=1)
+    assert "MISSING PERMISSION" not in e.output()
 
 
 @test

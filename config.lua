@@ -10,6 +10,7 @@ Config = {
 	Allow_Refresh_Command = true, -- players can run /refreshPerms after their roles change
 	Refresh_Throttle = 60, -- seconds between /refreshPerms uses per player
 	Sync_Interval = 300, -- seconds between automatic re-checks of every online player (0 = off)
+	Connect_Retries = 2, -- extra tries when Discord fails to answer while a player is joining (0 = none)
 
 	Trigger_vMenu = true, -- fire vMenu:RequestPermissions after granting perms (harmless if you don't use vMenu)
 	DebugScript = false,

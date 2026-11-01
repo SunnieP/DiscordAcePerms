@@ -230,6 +230,17 @@ AddEventHandler('playerConnecting', function(playerName, setKickReason, deferral
 	end
 
 	local member = fetchMember(src, discordId, true) -- fresh: someone just whitelisted must get in right away
+	-- Discord (or the network, or a server that is still booting) can fail once and work a moment later.
+	-- Try again a couple of times before turning a player away, but never keep them waiting long.
+	local started = GetGameTimer()
+	local retries = 0
+	while member.status == 'api_error' and retries < (Config.Connect_Retries or 2) and GetGameTimer() - started < 30000 do
+		retries = retries + 1
+		deferrals.update('Discord was slow to answer. Trying again...')
+		Wait(1500)
+		if discordIdOf(src) ~= discordId then return end
+		member = fetchMember(src, discordId, true)
+	end
 	if discordIdOf(src) ~= discordId then return end -- they cancelled while we waited
 
 	if member.status == 'ok' then
@@ -341,6 +352,16 @@ end)
 -- rounded by a spreadsheet, silently matches nobody, so say so loudly instead.
 -- (Limit: roles are looked up by name, so two roles sharing one name can make one look missing.)
 CreateThread(function()
+	-- ExecuteCommand from a resource is checked against that resource's own ACE. If it is missing, FiveM prints
+	-- "Access denied for command add_principal" and nothing is granted, with no error we could catch. Say so loudly.
+	if IsPrincipalAceAllowed then
+		for _, cmd in ipairs({ 'command.add_principal', 'command.remove_principal' }) do
+			if not IsPrincipalAceAllowed('resource.' .. RESOURCE, cmd) then
+				logError(('MISSING PERMISSION: add this to server.cfg or permissions will NOT be applied: add_ace resource.%s %s allow'):format(RESOURCE, cmd))
+			end
+		end
+	end
+
 	Wait(5000) -- let JMS_Discord_API finish starting and connecting
 	local ok, list = pcall(function() return exports[API]:GetGuildRoleList() end)
 	if not ok or type(list) ~= 'table' then

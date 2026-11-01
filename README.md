@@ -16,7 +16,16 @@ add_ace group.staff command.kick allow   # example: give staff whatever they sho
 
    Later you can point each staff role at its own group in `roleList`. The Baddies Portal role (Sweethearts) maps to `group.sweethearts`; define what that group may do the same way.
 
-4. In `server.cfg`, start the API before this resource:
+4. Let this resource change group membership. Without these two lines FiveM refuses its `add_principal` / `remove_principal` calls ("Access denied for command add_principal") and nobody gets any group:
+
+```cfg
+add_ace resource.DiscordAcePerms command.add_principal allow
+add_ace resource.DiscordAcePerms command.remove_principal allow
+```
+
+   The console prints `MISSING PERMISSION` at startup if they are absent.
+
+5. In `server.cfg`, start the API before this resource:
 
 ```cfg
 ensure JMS_Discord_API
