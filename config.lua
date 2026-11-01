@@ -1,6 +1,6 @@
 Config = {
 	Server_Name = 'Lover Lounge RP',
-	Discord_Link = 'https://discord.gg/CHANGE_ME', -- shown to players who are not in your Discord
+	Discord_Link = 'https://discord.gg/wmc53hebNA', -- shown to players who are not in your Discord
 
 	-- Hard whitelist: a player must be in your Discord AND hold Whitelist_Role to join.
 	-- If Discord itself is unreachable, nobody can join (the check fails closed).

@@ -7,7 +7,7 @@ Maintained fork of [DiscordAcePerms](https://github.com/JaredScar/DiscordAcePerm
 ## Setup
 
 1. Install and configure **JMS_Discord_API** first (bot token, guild ID). This resource needs its `GetDiscordRolesEx` export.
-2. Edit `config.lua`: set `Discord_Link`, `Whitelist_Role`, and `roleList` (Discord role ID to ACE group). Role IDs are **strings**.
+2. Edit `config.lua`: set `Discord_Link` (Lover Lounge: already set to https://discord.gg/wmc53hebNA), `Whitelist_Role`, and `roleList` (Discord role ID to ACE group). Role IDs are **strings**.
 3. Define the groups in your `permissions.cfg`. This resource only adds and removes players from a group; what the group may do is up to you. Out of the box, Owner, Admin, Dev and Management all map to one group, `group.staff`, so define that one first:
 
 ```cfg
