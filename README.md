@@ -7,14 +7,14 @@ Maintained fork of [DiscordAcePerms](https://github.com/JaredScar/DiscordAcePerm
 ## Setup
 
 1. Install and configure **JMS_Discord_API** first (bot token, guild ID). This resource needs its `GetDiscordRolesEx` export.
-2. Edit `config.lua`: set `Discord_Link` (Lover Lounge: already set to https://discord.gg/wmc53hebNA), `Whitelist_Role`, and `roleList` (Discord role ID to ACE group). Role IDs are **strings**.
-3. Define the groups in your `permissions.cfg`. This resource only adds and removes players from a group; what the group may do is up to you. Out of the box, Owner, Admin, Dev and Management all map to one group, `group.staff`, so define that one first:
+2. Edit `config.lua`: set `Discord_Link` (Lover Lounge: already set to https://discord.gg/loverlounge), `Whitelist_Role`, and `roleList` (Discord role ID to ACE group). Role IDs are **strings**.
+3. Define the groups in your `permissions.cfg`. This resource only adds and removes players from a group; what the group may do is up to you. Out of the box, Owner, Admin, Dev and Management all map to one group, `group.staff`. On Lover Lounge, `server.cfg` has `add_principal group.staff group.admin`, so staff can do everything `group.admin` can. For another server, define it yourself:
 
 ```cfg
 add_ace group.staff command.kick allow   # example: give staff whatever they should be able to do
 ```
 
-   Later you can point each staff role at its own group in `roleList`. If you also gate a city feature on a role (the Baddies Portal is the first), uncomment its entry in `roleList` and define that group the same way.
+   Later you can point each staff role at its own group in `roleList`. The Baddies Portal role (Sweethearts) maps to `group.sweethearts`; define what that group may do the same way.
 
 4. In `server.cfg`, start the API before this resource:
 

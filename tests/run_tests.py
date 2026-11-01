@@ -22,6 +22,7 @@ ADMIN = "1556173765396668486"
 DEV = "1552837076880334992"
 MGMT = "1562831844968497193"
 OWNER = "1552415657503490200"
+SWEET = "1552419921344856175"
 OTHER = "1500000000000000001"
 U1 = "111111111111111111"
 U2 = "222222222222222222"
@@ -542,7 +543,7 @@ def exports_work():
 def shipped_config_loads_without_ignored_entries():
     e = Env(players={}, shipped=True)
     assert "ignored" not in e.output() and "MISCONFIGURED" not in e.output(), e.output()
-    assert "Loaded 4 role mapping(s)" in e.output(), e.output()
+    assert "Loaded 5 role mapping(s)" in e.output(), e.output()
 
 
 @test
@@ -588,7 +589,7 @@ def shipped_config_demoted_staff_lose_the_group():
 # Startup check of configured role IDs
 # ---------------------------------------------------------------------------
 
-REAL_ROLES = {"Whitelisted": WL, "Admin": ADMIN, "Dev": DEV, "Management": MGMT}
+REAL_ROLES = {"Whitelisted": WL, "Admin": ADMIN, "Dev": DEV, "Management": MGMT, "Sweethearts": SWEET}
 
 
 @test
@@ -615,7 +616,7 @@ def startup_check_flags_an_id_that_is_not_in_the_discord():
 @test
 def startup_check_flags_a_bad_whitelist_role_too():
     e = Env(players={}, shipped=True)
-    e.guild_roles = {"Admin": ADMIN, "Dev": DEV, "Management": MGMT, "Owner": OWNER}  # whitelist role missing
+    e.guild_roles = {"Admin": ADMIN, "Dev": DEV, "Management": MGMT, "Owner": OWNER, "Sweethearts": SWEET}  # whitelist role missing
     e.run_thread(2, budget=1)
     assert f"Whitelist: role ID {WL} was not found" in e.output(), e.output()
 

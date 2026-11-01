@@ -1,6 +1,6 @@
 Config = {
 	Server_Name = 'Lover Lounge RP',
-	Discord_Link = 'https://discord.gg/wmc53hebNA', -- shown to players who are not in your Discord
+	Discord_Link = 'https://discord.gg/loverlounge', -- shown to players who are not in your Discord
 
 	-- Hard whitelist: a player must be in your Discord AND hold Whitelist_Role to join.
 	-- If Discord itself is unreachable, nobody can join (the check fails closed).
@@ -20,14 +20,14 @@ Config = {
 	-- The groups themselves (and what they may do) are defined in your permissions.cfg.
 	-- On startup the console tells you if any ID here (or Whitelist_Role) is not found in your Discord.
 	roleList = {
-		-- Staff: during testing every staff role gets the same group. Split them up later by pointing
-		-- each role at its own group.
+		-- Staff: during testing every staff role gets the same group (group.staff, which server.cfg makes inherit
+		-- everything group.admin can do). Split them up later by pointing each role at its own group.
 		{ '1552415657503490200', 'group.staff' }, -- Owner
 		{ '1556173765396668486', 'group.staff' }, -- Admin
 		{ '1552837076880334992', 'group.staff' }, -- Dev
 		{ '1562831844968497193', 'group.staff' }, -- Management
 
-		-- Gated city features. Right now the only one is the Baddies Portal.
-		-- { 'BADDIES_ROLE_ID', 'group.baddies' }, -- paste the role ID, then uncomment
+		-- Gated city features. Right now the only one is the Baddies Portal (Discord role: Sweethearts).
+		{ '1552419921344856175', 'group.sweethearts' }, -- Sweethearts
 	},
 }
