@@ -25,7 +25,7 @@ Config = {
 		{ '1552415657503490200', 'group.staff' }, -- Owner
 		{ '1556173765396668486', 'group.staff' }, -- Admin
 		{ '1552837076880334992', 'group.staff' }, -- Dev
-		{ '1562831844968497193', 'group.staff' }, -- Management
+		-- { 'MANAGEMENT_ROLE_ID', 'group.staff' }, -- Management: off until the correct role ID is confirmed
 
 		-- Gated city features. Right now the only one is the Baddies Portal (Discord role: Sweethearts).
 		{ '1552419921344856175', 'group.sweethearts' }, -- Sweethearts

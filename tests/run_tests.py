@@ -543,13 +543,13 @@ def exports_work():
 def shipped_config_loads_without_ignored_entries():
     e = Env(players={}, shipped=True)
     assert "ignored" not in e.output() and "MISCONFIGURED" not in e.output(), e.output()
-    assert "Loaded 5 role mapping(s)" in e.output(), e.output()
+    assert "Loaded 4 role mapping(s)" in e.output(), e.output()
 
 
 @test
 def shipped_config_every_staff_role_gets_the_same_single_group():
     """Staff are deliberately identical during testing; split them up later."""
-    for name, role in (("owner", OWNER), ("admin", ADMIN), ("dev", DEV), ("management", MGMT)):
+    for name, role in (("owner", OWNER), ("admin", ADMIN), ("dev", DEV)):
         e = Env(players={1: U1}, api={U1: ok([WL, role])}, shipped=True)
         assert e.connect(1)["done"] == [None], name
         assert e.effective(U1) == ["group.staff"], (name, e.effective(U1))
